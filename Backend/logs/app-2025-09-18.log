@@ -1,6 +1,0 @@
-{"level":["error"],"timestamp":"18:09:2025|10:09:39","exception":true,"message":"uncaughtException: The `uri` parameter to `openUri()` must be a string, got \"undefined\". Make sure the first parameter to `mongoose.connect()` or `mongoose.createConnection()` is a string."}
-{"level":["warn"],"timestamp":"18:09:2025|10:09:91","exception":false,"message":"MongoDB Connection Closed Successfully!"}
-{"level":["error"],"timestamp":"18:09:2025|10:09:76","exception":false,"message":"CREATE_MAIN_ADMIN"}
-{"level":["error"],"timestamp":"18:09:2025|10:09:76","exception":false,"message":"data and salt arguments required"}
-{"level":["info"],"timestamp":"18:09:2025|10:09:76","exception":false,"message":"MongoDB connected"}
-{"level":["warn"],"timestamp":"18:09:2025|10:09:12","exception":false,"message":"MongoDB Disconnecting"}
