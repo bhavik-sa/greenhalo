@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/bhaviksenjaliya/Documents/Projects/greenhalo/logs/.f609a7aba83757e5d9940a99ebca79066c113643-audit.json",
+    "files": [
+        {
+            "date": 1758172576148,
+            "name": "/home/bhaviksenjaliya/Documents/Projects/greenhalo/logs/app-2025-09-18.log",
+            "hash": "2cb3ac577abc5b0334fcbc5f865c1363b4e24844be7dbfc90bb9901269844e33"
+        },
+        {
+            "date": 1758263355217,
+            "name": "/home/bhaviksenjaliya/Documents/Projects/greenhalo/logs/app-2025-09-19.log",
+            "hash": "0d45014261e326f8a70748700652bc6293ac73ce302f60570924cce3a6a14845"
+        }
+    ],
+    "hashType": "sha256"
+}
