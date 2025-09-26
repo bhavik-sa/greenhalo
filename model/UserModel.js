@@ -11,7 +11,7 @@ const userSchema = new Schema(
     password_hash: { type: String },
     status: { type: String, enum: constant.USER_STATUS, default: constant.USER_STATUS[0] },
     subscription: { type: String, enum: constant.SUBSCRIPTION, default: constant.SUBSCRIPTION[0] },
-    badges: [{ type: ObjectId, ref: "target_model" }],
+    badges: [{ type: ObjectId, ref: "badge" }],
     target_model: { 
       type: String, 
       enum: ["green_halo", "halod", "safer_dating"],

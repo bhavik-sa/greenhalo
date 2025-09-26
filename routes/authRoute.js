@@ -14,6 +14,7 @@ import { body } from "express-validator";
 import { validateField } from "../middleware/field_validator/index.js";
 import messages from "../utilities/messages.js";
 import { isAdmin } from "../middleware/admin_validator/admin_validator.js";
+import { upload } from "../helper/multerHelper.js";
 
 const router = express.Router();
 
@@ -94,6 +95,7 @@ router.get(
 // Update user profile
 router.put(
   '/profile',
+  upload.single('profile_image'),
   isAdmin,
   updateProfile
 );

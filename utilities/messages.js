@@ -101,7 +101,7 @@ const messages = {
 
 
 
-
+    searchMustBeAString: 'Search must be a string',
     userUpdated: 'User updated successfully',
 
     reportSubmitted: 'Report submitted successfully',
@@ -113,10 +113,14 @@ const messages = {
     reportUpdated: 'Report updated successfully',
 
     emailAlreadyExist: 'Email already exist',
+    mediaIsRequired: 'Media url is required',
+    mediaNotFound: 'Media not found. To create a new media entry, please provide both the media file and type.',
     badgeNotFound: 'Badge not found',
+    badgeCreated: 'Badge created successfully',
     iconIsRequired: 'Icon is required',
     badgeUpdated: 'Badge updated successfully',
     badgeDeleted: 'Badge deleted successfully', 
+    invalidType: 'Invalid type',
     checkinChampCreated: 'Checkin Champ created successfully',
     badgeAssignedToUserSuccessfully: 'Badge assigned to user successfully',
     badgeRemovedFromUserSuccessfully: 'Badge removed from user successfully',

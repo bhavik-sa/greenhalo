@@ -4,7 +4,7 @@ const Schema = mongoose.Schema
 const { ObjectId } = mongoose.Schema
 
 const SaferDatingMediaSchema = new Schema({
-    safer_dating_id: { type: ObjectId, ref: "safer_dating" },
+    safer_dating_id: { type: ObjectId, ref: "badge" },
     type: { type: String, enum: constant.MEDIA_TYPE },
     url: { type: String, required: true },
     is_active: { type: Boolean, default: true }

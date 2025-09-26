@@ -26,7 +26,8 @@ export const isAdmin = async (req, res, next, type = 1) => {
       {
         _id: 1,
         role: 1,
-        username: 1,        
+        username: 1,   
+        profile_url: 1,      
       }
     )
     if (!adminDetails) {

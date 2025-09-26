@@ -3,14 +3,7 @@ import { sendSuccess, sendBadRequest } from "../utilities/response/index.js";
 import logger from "../utilities/logger.js";
 import { errorHelper } from "../helper/errorHelper.js";
 import messages from "../utilities/messages.js";
-import { BaseContent } from "../model/BaseContentModel.js";
-import { CheckinChampModel } from "../model/CheckinChampModel.js";
-import { GreenHaloModel } from "../model/GreenHaloModel.js";
-import { SocialConnectModel } from "../model/SocialConnectModel.js";
-import { GreenFlaggedModel } from "../model/GreenFlaggedModel.js";
-import { HalodModel } from "../model/HalodModel.js";
-import { SaferDatingModel } from "../model/SaferDatingModel.js";
-import { SaferDatingMediaModel } from "../model/SaferDatingMediaModel.js";
+import { BadgeContentModel } from "../model/BaseContentModel.js";
 import { ReportModel } from "../model/ReportModel.js";
 import { CMSPageModel } from "../model/CmsMode.js";
 import { ContactUsModel } from "../model/ContactUsModel.js";
@@ -20,6 +13,8 @@ import { fileURLToPath } from "url";
 import { readFile } from "fs/promises";
 import { dirname } from "path";
 import { deleteFile } from "../middleware/field_validator/index.js";
+import { SaferDatingMediaModel } from "../model/SaferDatingMediaModel.js";
+import { AuditHistoryModel } from "../model/AuditHistoryMddel.js";
 
 /**
  * Get user by ID or list of users with filters
@@ -33,12 +28,10 @@ export const getUsers = async (req, res) => {
       role,
       status,
       subscription,
-      username,
-      email,
       badge,
       startDate,
       endDate,
-      search, // New search parameter for general text search
+      search, // Common search parameter for username and email
       page = 1,
       limit = 10
     } = req.query;
@@ -46,33 +39,74 @@ export const getUsers = async (req, res) => {
     // If ID is provided, return single user
     if (userId) {
       const user = await UserModel.findById(userId)
+        .populate({
+          path: 'badges',
+          match: { is_active: true },
+          select: 'title'
+        })
         .lean();
 
       if (!user) {
         return sendBadRequest(res, messages.userNotFound);
       }
 
-      return sendSuccess(res,  user );
+      let unassignedBadges = [];
+
+
+
+      unassignedBadges = await BadgeContentModel.find({
+        is_active: true,
+        _id: { $nin: user.badges.map(badge => badge._id) }
+      }).select('title').lean();
+
+
+
+      return sendSuccess(res, { user, unassignedBadges, assignedBadges: user.badges });
     }
 
     // Build filter object based on query parameters
     const filter = { role: { $ne: constant.ROLE[0] } }; // Always exclude admin users
 
-    // Text search across multiple fields if search query is provided
+    // Apply role and status filters
+    if (role) filter.role = role;
+    if (status) filter.status = status;
+    if (subscription) filter.subscription = subscription.toUpperCase();
+    if (badge) filter.badges = { $in: [badge] };
+
+
+    // Apply search across username, email, and full name if search parameter is provided
     if (search) {
-      filter.$or = [
-        { username: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { 'profile.fullName': { $regex: search, $options: 'i' } }
-      ];
-    } else {
-      // Individual field filters (only if no general search)
-      if (role) filter.role = role;
-      if (status) filter.status = status;
-      if (subscription) filter.subscription = subscription.toUpperCase();
-      if (username) filter.username = { $regex: username, $options: 'i' };
-      if (email) filter.email = { $regex: email, $options: 'i' };
-      if (badge) filter.badges = { $in: [badge] };
+      try {
+        filter.$or = [
+          { username: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } },
+        ]
+
+        // Create a clean filter object
+        const cleanFilter = {};
+        if (role) cleanFilter.role = role;
+        if (status) cleanFilter.status = status;
+        if (subscription) cleanFilter.subscription = subscription.toUpperCase();
+        if (badge) cleanFilter.badges = { $in: [badge] };
+
+        // Build the final query
+        const query = {
+          $and: [
+            { role: { $ne: constant.ROLE[0] } }, // Always exclude admin users
+            { $or: filter.$or },
+            ...Object.entries(cleanFilter).map(([key, value]) => ({ [key]: value }))
+          ]
+        };
+
+        // Replace the filter with our new query
+        Object.keys(filter).forEach(key => delete filter[key]);
+        Object.assign(filter, query);
+
+      } catch (error) {
+        console.error('Search error:', error);
+        logger.error('Error in search filter:', { error, search });
+        return sendBadRequest(res, 'Invalid search parameter');
+      }
     }
 
     // Date range filter
@@ -91,13 +125,13 @@ export const getUsers = async (req, res) => {
 
     // Get total count for pagination
     const total = await UserModel.countDocuments(filter);
-    
+
     // Get active users count
     const activeUsers = await UserModel.countDocuments({
       ...filter,
       status: 'ACTIVE'
     });
-    
+
     // Get inactive users count
     const inactiveUsers = await UserModel.countDocuments({
       ...filter,
@@ -106,6 +140,11 @@ export const getUsers = async (req, res) => {
 
     // Get paginated users
     const results = await UserModel.find(filter)
+      .populate({
+        path: 'badges',
+        select: 'title',  // Select the fields you need
+        match: { is_active: true }  // Only include active badges if needed
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -144,7 +183,7 @@ export const getUsers = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const updateUserProfile = async (req, res) => {
+export const updateUser = async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -156,18 +195,31 @@ export const updateUserProfile = async (req, res) => {
     if (req.body.subscription) {
       user.subscription = req.body.subscription.toUpperCase()
     }
-    if (req.body.badge) {
-      user.badges = req.body.badge
+
+    if (req.body.badgeId) {
+      user.badges.push(req.body.badgeId)
     }
+    if (req.body.removeBadgeId) {
+      user.badges.pull(req.body.removeBadgeId)
+    }
+
     if (req.body.status) {
       user.status = req.body.status.toUpperCase()
     }
     await user.save()
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "UPDATE_USER",
+      details: {
+        ...req.body,
+        email: user.email,
+      },
+    }).save();
     return sendSuccess(res, null, messages.userUpdated);
   } catch (e) {
-    logger.error('UPDATE_USER_PROFILE_ERROR');
+    logger.error('UPDATE_USER_ERROR');
     logger.error(e);
-    return sendBadRequest(res, errorHelper(e, "UPDATE_USER_PROFILE"));
+    return sendBadRequest(res, errorHelper(e, "UPDATE_USER"));
   }
 };
 
@@ -289,6 +341,15 @@ export const updateReportStatus = async (req, res) => {
       { new: true, runValidators: true }
     )
 
+    await new AuditHistoryModel({
+      actor_id: adminId,
+      action: "UPDATE_REPORT_STATUS",
+      details: {
+        ...req.body,
+        email: user.email,
+      },
+    }).save();
+
     return sendSuccess(res, messages.reportUpdated);
   } catch (e) {
     logger.error('UPDATE_REPORT_STATUS_ERROR');
@@ -299,180 +360,57 @@ export const updateReportStatus = async (req, res) => {
 
 
 
-export const createCheckinChamp = async (req, res) => {
+export const createBadge = async (req, res) => {
   try {
-    const { title, status } = req.body;
+    const { title, status, type } = req.body;
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = dirname(__filename);
     const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/checkin.html'),
-      'utf-8'
-    );
-    if(!req.file){
-      return sendBadRequest(res, messages.iconIsRequired)
-    }
-
-    await new CheckinChampModel({
-      title,
-      icon_url : req.file.path || '',
-      html_content : htmlContent,
-      status,
-    }).save();
-
-    return sendSuccess(res, null, messages.checkinChampCreated);
-  } catch (error) {
-    console.error("CREATE_CHECKIN_CHAMP_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Checkin Champ");
-  }
-};
-
-
-export const createGreenhaloChamp = async (req, res) => {
-  try {
-    const { title, status } = req.body;
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/greenhalo.html'),
+      path.join(__dirname, '../public/html/social_safer_dating.html'),
       'utf-8'
     );
 
-    if(!req.file){
-      return sendBadRequest(res, messages.iconIsRequired)
+    if (!req.files || !req.files['icon_url'] || req.files['icon_url'].length === 0) {
+      return sendBadRequest(res, messages.iconIsRequired);
     }
 
-    await new GreenHaloModel({
+    const badge = await new BadgeContentModel({
       title,
-      icon_url : req.file.path || '',
-      html_content : htmlContent,
+      icon_url: req.files['icon_url'][0].path || '',
+      html_content: htmlContent,
       status,
     }).save();
 
-    return sendSuccess(res, null, messages.greenHaloBadgeCreated);
-  } catch (error) {
-    console.error("CREATE_GREENHALO_CHAMP_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Greenhalo Champ");
-  }
-};
-
-
-export const createSocialConnectChamp = async (req, res) => {
-  try {
-    const { title, status } = req.body;
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/social_connect.html'),
-      'utf-8'
-    );
-
-    if(!req.file){
-      return sendBadRequest(res, messages.iconIsRequired)
+    if (badge && type) {
+      if (!req.files['safer_dating_media_uri'] || req.files['safer_dating_media_uri'].length === 0) {
+        return sendBadRequest(res, messages.mediaIsRequired);
+      } else {
+        await new SaferDatingMediaModel({
+          safer_dating_id: badge._id,
+          type: type,
+          url: req.files['safer_dating_media_uri'][0].path || '',
+          is_active: true
+        }).save();
+      }
     }
 
-    await new SocialConnectModel({
-      title,
-      icon_url : req.file.path || '',
-      html_content : htmlContent,
-      status,
-    }).save();
-
-    return sendSuccess(res, null, messages.socialConnectBadgeCreated);
+    return sendSuccess(res, null, messages.badgeCreated);
   } catch (error) {
-    console.error("CREATE_SOCIAL_CONNECT_CHAMP_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Social Connect Champ");
-  }
-};
+    console.error("CREATE_BADGE_ERROR", error);
 
-
-export const createGreenFlaggedBadge = async (req, res) => {
-  try {
-    const { title, status } = req.body;
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/green_flagged.html'),
-      'utf-8'
-    );
-
-    if(!req.file){
-      return sendBadRequest(res, messages.iconIsRequired)
+    if (req.files) {
+      Object.values(req.files).forEach(fileArray => {
+        fileArray.forEach(file => {
+          if (file.path) {
+            deleteFile(file.path).catch(console.error);
+          }
+        });
+      });
     }
 
-    await new GreenFlaggedModel({
-      title,
-      icon_url : req.file.path || '',
-      html_content : htmlContent,
-      status,
-    }).save();
-
-    return sendSuccess(res, null, messages.greenFlaggedBadgeCreated);
-  } catch (error) {
-    console.error("CREATE_GREEN_FLAGGED_BADGE_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Green Flagged Badge");
+    return sendBadRequest(res, error.message || "Error creating Badge");
   }
 };
-
-
-
-export const createHalodBadge = async (req, res) => {
-  try {
-    const { title, status } = req.body;
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/halod.html'),
-      'utf-8'
-    );
-
-    if(!req.file){
-      return sendBadRequest(res, messages.iconIsRequired)
-    }
-
-    await new HalodModel({
-      title,
-      icon_url : req.file.path || '',
-      html_content : htmlContent,
-      status,
-    }).save();
-
-    return sendSuccess(res, null, messages.halodBadgeCreated);
-  } catch (error) {
-    console.error("CREATE_HALOD_BADGE_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Halod Badge");
-  }
-};
-
-
-
-export const createSaferDatingBadge = async (req, res) => {
-  try {
-    const { title, status } = req.body;
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/safer_dating.html'),
-      'utf-8'
-    );
-
-    if(!req.file){
-      return sendBadRequest(res, messages.iconIsRequired)
-    }
-
-    await new SaferDatingModel({
-      title,
-      icon_url : req.file.path || '',
-      html_content : htmlContent,
-      status,
-    }).save();
-
-    return sendSuccess(res, null, messages.saferDatingBadgeCreated);
-  } catch (error) {
-    console.error("CREATE_SAFER_DATING_BADGE_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Safer Dating Badge");
-  }
-};
-
 
 /**
  * Get all badges or a specific badge by ID
@@ -481,72 +419,64 @@ export const createSaferDatingBadge = async (req, res) => {
  */
 export const getBadges = async (req, res) => {
   try {
-    const { badgeId, title, status, type } = req.query;
+    const { badgeId, search, status, startDate, endDate } = req.query;
     const { page = 1, limit = 10 } = req.query;
-    
+
     // If ID is provided, fetch a single badge
     if (badgeId) {
-      const badge = await BaseContent.findById(badgeId).lean();
-      if (!badge) return sendBadRequest(res,messages.badgeNotFound);
+      const badge = await BadgeContentModel.findById(badgeId)
+        .populate({
+          path: 'safer_dating_media',
+          match: { is_active: true },
+          select: 'type url'
+        })
+        .lean();
+
+      if (!badge) return sendBadRequest(res, messages.badgeNotFound);
       return sendSuccess(res, badge);
     }
-    
+
     // If no ID, fetch all badges with pagination and optional type filter
     const query = {};
-    if (type) {
-      query.contentType = type;
-    }
-    if (title) {
-      query.title = { $regex: title, $options: 'i' };
+    if (search) {
+      query.title = { $regex: search, $options: 'i' };
     }
     if (status) {
       query.status = status;
     }
-    
-    const results = await BaseContent.find(query)
+    if (startDate) {
+      query.createdAt = { $gte: new Date(startDate) };
+    }
+    if (endDate) {
+      query.createdAt = { $lte: new Date(endDate) };
+    }
+
+    const results = await BadgeContentModel.find(query)
+      .populate({
+        path: 'safer_dating_media',
+        match: { is_active: true },
+        select: 'type url'
+      })
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .lean();
-    
-    const count = await BaseContent.countDocuments(query);
-    
+
+    const count = await BadgeContentModel.countDocuments(query);
+
     return sendSuccess(res, {
       results,
       totalPages: Math.ceil(count / limit),
       currentPage: page,
       totalItems: count
     });
-    
+
   } catch (error) {
     console.error('GET_BADGES_ERROR:', error);
     return sendBadRequest(res, error.message || 'Error fetching badges');
   }
 };
 
-
-export const createSocialSaferDatingBadge = async (req, res) => {
-  try {
-    const { type , safer_dating_id } = req.body;
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const htmlContent = await readFile(
-      path.join(__dirname, '../public/html/social_safer_dating.html'),
-      'utf-8'
-    );
-
-    await new SaferDatingMediaModel({
-      safer_dating_id : safer_dating_id,
-      type : type,
-      url : req.file.path || '',
-    }).save();
-
-    return sendSuccess(res, null, messages.socialSaferDatingBadgeCreated);
-  } catch (error) {
-    console.error("CREATE_SOCIAL_SAFER_DATING_BADGE_ERROR", error);
-    return sendBadRequest(res, error.message || "Error creating Social Safer Dating Badge");
-  }
-};
 
 /**
  * Update a badge by ID
@@ -558,22 +488,40 @@ export const updateBadge = async (req, res) => {
     const { badgeId } = req.params;
     const updateData = { ...req.body };
 
-    const badge = await BaseContent.findById(badgeId);
+    const badge = await BadgeContentModel.findById(badgeId);
 
-    if (!badge) return sendBadRequest(res,messages.badgeNotFound);
+    if (!badge) return sendBadRequest(res, messages.badgeNotFound);
 
-    if (req.file) {
-      if(badge.icon_url){
+    if (req.files && req.files['icon_url'] && req.files['icon_url'].length > 0) {
+      if (badge.icon_url) {
         deleteFile(badge.icon_url);
       }
-      updateData.icon_url = req.file.path;
+      updateData.icon_url = req.files['icon_url'][0].path;
     }
 
-    await BaseContent.findByIdAndUpdate(
+    await BadgeContentModel.findByIdAndUpdate(
       badgeId,
       { $set: updateData },
       { new: true, runValidators: true }
     );
+
+    if (req.files && req.files['safer_dating_media_uri'] && req.files['safer_dating_media_uri'].length > 0) {
+      // const saferDatingMedia = await SaferDatingMediaModel.findOne({ safer_dating_id: badgeId });
+      // if(!saferDatingMedia) return sendBadRequest(res, messages.mediaNotFound);
+      await SaferDatingMediaModel.updateOne({ safer_dating_id: badgeId }, { $set: { url: req.files['safer_dating_media_uri'][0].path, type: updateData?.type } }, { upsert: true });
+    }
+
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "UPDATE_BADGE",
+      details: {
+        ...req.body,
+        icon_url: updateData.icon_url,
+        safer_dating_media_uri: updateData.safer_dating_media_uri,
+        type: updateData.type,
+        badgeId,
+      },
+    }).save();
 
     return sendSuccess(res, null, messages.badgeUpdated);
   } catch (error) {
@@ -591,11 +539,19 @@ export const deleteBadge = async (req, res) => {
   try {
     const { badgeId } = req.params;
 
-    const badge = await BaseContent.findById(badgeId);
-    
-    if (!badge) return sendBadRequest(res,messages.badgeNotFound);
-   
-    await BaseContent.deleteOne({ _id: badgeId });
+    const badge = await BadgeContentModel.findById(badgeId);
+
+    if (!badge) return sendBadRequest(res, messages.badgeNotFound);
+
+    await BadgeContentModel.deleteOne({ _id: badgeId });
+
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "DELETE_BADGE",
+      details: {
+        badgeId,
+      },
+    }).save();
 
     return sendSuccess(res, null, messages.badgeDeleted);
   } catch (error) {
@@ -615,14 +571,14 @@ export const assignBadgeToUser = async (req, res) => {
 
     // Validate user exists
     const user = await UserModel.findById(userId);
-    if (!user) return sendBadRequest(res,messages.userNotFound);
+    if (!user) return sendBadRequest(res, messages.userNotFound);
 
     // Validate badge exists
-    const badge = await BaseContent.findById(badgeId);
-    if (!badge) return sendBadRequest(res,messages.badgeNotFound);
+    const badge = await BadgeContentModel.findById(badgeId);
+    if (!badge) return sendBadRequest(res, messages.badgeNotFound);
 
     // Check if user already has this badge
-    if (user.badges && user.badges.includes(badgeId)) return sendBadRequest(res,messages.userAlreadyHasThisBadge);
+    if (user.badges && user.badges.includes(badgeId)) return sendBadRequest(res, messages.userAlreadyHasThisBadge);
 
     // Add badge to user
     await UserModel.findByIdAndUpdate(
@@ -649,11 +605,11 @@ export const removeBadgeFromUser = async (req, res) => {
 
     // Validate user exists
     const user = await UserModel.findById(userId);
-    if (!user) return sendBadRequest(res,messages.userNotFound);
+    if (!user) return sendBadRequest(res, messages.userNotFound);
 
     // Check if user has this badge
-    if (!user.badges || !user.badges.includes(badgeId)) return sendBadRequest(res,messages.userDoesNotHaveThisBadge);
-    
+    if (!user.badges || !user.badges.includes(badgeId)) return sendBadRequest(res, messages.userDoesNotHaveThisBadge);
+
     // Remove badge from user
     await UserModel.findByIdAndUpdate(
       userId,
@@ -679,7 +635,7 @@ export const createCmsPage = async (req, res) => {
 
     // Check if page with same name already exists
     const existingPage = await CMSPageModel.findOne({ page_name });
-    if (existingPage) return sendBadRequest(res,messages.pageNameAlreadyExists);
+    if (existingPage) return sendBadRequest(res, messages.pageNameAlreadyExists);
 
     const newPage = new CMSPageModel({
       page_name,
@@ -688,6 +644,17 @@ export const createCmsPage = async (req, res) => {
     });
 
     await newPage.save();
+
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "CREATE_CMS_PAGE",
+      details: {
+        ...req.body,
+        page_name,
+        content,
+        status,
+      },
+    }).save();
 
     return sendSuccess(res, null, messages.cmsPageCreatedSuccessfully);
   } catch (error) {
@@ -703,8 +670,7 @@ export const createCmsPage = async (req, res) => {
  */
 export const getCmsPages = async (req, res) => {
   try {
-    const { pageId } = req.query;
-    const { page = 1, limit = 10, status, page_name, content } = req.query;
+    const { page = 1, limit = 10, search, pageId, status, startDate, endDate } = req.query;
 
     // If ID is provided, fetch a single page
     if (pageId) {
@@ -721,14 +687,23 @@ export const getCmsPages = async (req, res) => {
       query.status = status;
     }
 
-    if (page_name) {
-      query.page_name = { $regex: page_name, $options: 'i' };
+    if (search) {
+      query.$or = [
+        { page_name: { $regex: search, $options: 'i' } },
+        { content: { $regex: search, $options: 'i' } }
+      ];
     }
 
-    if (content) {
-      query.content = { $regex: content, $options: 'i' };
+    // Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) {
+        const endOfDay = new Date(endDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = endOfDay;
+      }
     }
-
 
 
     const results = await CMSPageModel.find(query)
@@ -790,6 +765,17 @@ export const updateCmsPage = async (req, res) => {
       { new: true, runValidators: true }
     );
 
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "UPDATE_CMS_PAGE",
+      details: {
+        ...req.body,
+        page_name,
+        content,
+        status,
+      },
+    }).save();
+
     return sendSuccess(res, null, messages.cmsPageUpdatedSuccessfully);
   } catch (error) {
     console.error('UPDATE_CMS_PAGE_ERROR:', error);
@@ -813,6 +799,14 @@ export const deleteCmsPage = async (req, res) => {
       return sendBadRequest(res, messages.cmsPageNotFound, 404);
     }
 
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "DELETE_CMS_PAGE",
+      details: {
+        pageId,
+      },
+    }).save();
+
     return sendSuccess(res, null, messages.cmsPageDeletedSuccessfully);
   } catch (error) {
     console.error('DELETE_CMS_PAGE_ERROR:', error);
@@ -828,9 +822,9 @@ export const deleteCmsPage = async (req, res) => {
  */
 export const getContactRequests = async (req, res) => {
   try {
-    const { contactId, status, adminId, subject, message, userId } = req.query;
+    const { contactId, status, adminId, search, userId, startDate, endDate } = req.query;
     let { page = 1, limit = 10 } = req.query;
-    
+
     // Convert to numbers
     page = parseInt(page, 10);
     limit = parseInt(limit, 10);
@@ -840,11 +834,11 @@ export const getContactRequests = async (req, res) => {
     if (contactId) {
       const contact = await ContactUsModel.findById(contactId)
         .populate('user_id', 'username email');
-      
+
       if (!contact) {
         return sendBadRequest(res, messages.contactRequestNotFound, 404);
       }
-      
+
       return sendSuccess(res, contact, messages.contactRequestRetrievedSuccessfully);
     }
 
@@ -856,25 +850,31 @@ export const getContactRequests = async (req, res) => {
     if (adminId) {
       query.admin_id = adminId;
     }
-    if (subject) {
-      query.subject = { $regex: subject, $options: 'i' };
-    }
-    if (message) {
-      query.message = { $regex: message, $options: 'i' };
+    if (search) {
+      query.$or = [
+        { subject: { $regex: search, $options: 'i' } },
+        { message: { $regex: search, $options: 'i' } },
+      ]
     }
     if (userId) {
       query.user_id = userId;
     }
+    if (startDate) {
+      query.createdAt = { $gte: new Date(startDate) };
+    }
+    if (endDate) {
+      query.createdAt = { $lte: new Date(endDate) };
+    }
     // Get total count for pagination
     const total = await ContactUsModel.countDocuments(query);
-    
+
     // Get paginated results
     const results = await ContactUsModel.find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .populate('user_id', 'username email');
-    
+
     // Prepare response
     const response = {
       results,
@@ -885,7 +885,7 @@ export const getContactRequests = async (req, res) => {
       hasNextPage: page * limit < total,
       hasPrevPage: page > 1
     };
-    
+
     return sendSuccess(res, response, messages.contactRequestsRetrievedSuccessfully);
   } catch (error) {
     console.error('GET_CONTACT_REQUESTS_ERROR:', error);
@@ -919,13 +919,13 @@ export const respondToContactRequest = async (req, res) => {
     // Find and update the contact request
     const updatedContact = await ContactUsModel.findOneAndUpdate(
       { _id: contactId },
-      { 
-        $set: { 
+      {
+        $set: {
           admin_response: response,
           admin_id: adminId,
           status: status.toUpperCase(),
           responded_at: new Date()
-        } 
+        }
       },
       { new: true, runValidators: true }
     )
@@ -934,10 +934,68 @@ export const respondToContactRequest = async (req, res) => {
       return sendBadRequest(res, messages.contactRequestNotFound, 404);
     }
 
+    await new AuditHistoryModel({
+      actor_id: req.user.id,
+      action: "RESPOND_TO_CONTACT_REQUEST",
+      details: {
+        ...req.body,
+        subject: updatedContact.subject,
+        message: updatedContact.message,
+        contactId,
+      },
+    }).save();
+
 
     return sendSuccess(res, updatedContact, messages.responseSentSuccessfully);
   } catch (error) {
     console.error('RESPOND_TO_CONTACT_REQUEST_ERROR:', error);
     return sendBadRequest(res, error.message || 'Error sending response to contact request');
+  }
+};
+
+
+
+export const getAuditHistory = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search, startDate, endDate } = req.query;
+    const skip = (page - 1) * limit;
+
+    let query = {};
+    if (search) {
+      query.action = { $regex: search, $options: 'i' };
+    }
+
+    if(startDate) {
+      query.createdAt = { $gte: new Date(startDate) };
+    }
+
+    if(endDate) {
+      query.createdAt = { $lte: new Date(endDate) };
+    }
+
+    const results = await AuditHistoryModel.find(query)
+      .populate({
+        path: 'actor_id',
+        select: 'username email',
+        model: 'user' // Explicitly specify the model name
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const count = await AuditHistoryModel.countDocuments(query);
+
+    return sendSuccess(res, {
+      results,
+      pagination: {
+        totalPages: Math.ceil(count / limit),
+        currentPage: page,
+        totalItems: count
+      }
+    });
+  } catch (error) {
+    console.error('GET_AUDIT_HISTORY_ERROR:', error);
+    return sendBadRequest(res, error.message || 'Error retrieving audit history');
   }
 };

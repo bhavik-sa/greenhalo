@@ -3,11 +3,7 @@ const Schema = mongoose.Schema
 const { ObjectId } = mongoose.Schema
 
 const QuestionSchema = new Schema({
-    target_id: { type: ObjectId, refPath: "target_model" },
-    target_model: { 
-      type: String, 
-      enum: ["green_halo", "halod", "safer_dating"],
-    },
+    badge_id: { type: ObjectId, ref: "badge" },
     question: {type: String,},
     options: [{type: String, }],
     answer: {type: String, },

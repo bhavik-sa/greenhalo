@@ -9,6 +9,7 @@ import { generateAccessToken } from "../helper/accessTokenHelper.js";
 import messages from "../utilities/messages.js";
 import { errorHelper } from "../helper/errorHelper.js";
 import { sendForgotPasswordEmail, sendMfaEmail } from "../utilities/email.js";
+import { AuditHistoryModel } from "../model/AuditHistoryMddel.js";
 
 //Token
 export const tokenId = () => {
@@ -39,7 +40,7 @@ export const createMainAdmin = async () => {
 export const creatUser = async (req, res) => {
   try {
     const data = req.body;
-    
+
     const user = await UserModel.create(data);
     return sendSuccess(res, user, messages.userCreated);
   } catch (e) {
@@ -67,6 +68,12 @@ export const login = async (req, res) => {
       return sendBadRequest(res, messages.InvalidAdmin)
     }
 
+
+    await new AuditHistoryModel({
+      actor_id: user._id,
+      action: "LOGIN",
+      details: data,
+    }).save();
 
     // No MFA – issue access token directly
     return sendSuccess(
@@ -100,7 +107,9 @@ export const setupMfa = async (req, res) => {
     user.mfa.secret = undefined; // not used for email OTP
     user.mfa.otp = otp;
     user.mfa.otp_expires = expires;
-    
+
+
+
     await user.save();
 
     await sendMfaEmail({ to: user.email, code: otp, expiresAt: expires });
@@ -144,6 +153,15 @@ export const verifyMfaCode = async (req, res) => {
     // Issue a fresh access token after MFA success
     const access_token = await generateAccessToken({ _id: user._id }, user.role);
 
+    await new AuditHistoryModel({
+      actor_id: user._id,
+      action: "VERIFY_MFA_CODE",
+      details: {
+        userId: user._id,
+        otp,
+        role: user.role,
+      },
+    }).save();
     return sendSuccess(res, { id: user._id, access_token, role: user.role }, messages.mfaCodeVerified);
   } catch (e) {
     logger.error("VERIFY_MFA_CODE");
@@ -184,6 +202,18 @@ export const forgotPassword = async (req, res) => {
       resetUrl,
     });
 
+    await new AuditHistoryModel({
+      actor_id: user._id,
+      action: "FORGOT_PASSWORD",
+      details: {
+        email,
+        resetToken,
+        resetTokenExpiry,
+        resetUrl,
+        role: user.role,
+      },
+    }).save();
+
     // TODO: Send email with reset link
 
     return sendSuccess(res, {}, 'Password reset link has been sent to your email');
@@ -214,6 +244,15 @@ export const resetPassword = async (req, res) => {
     user.reset_token_expiry = undefined;
     await user.save();
 
+    await new AuditHistoryModel({
+      actor_id: user._id,
+      action: "RESET_PASSWORD",
+      details: {
+        email: user.email,
+        role: user.role,
+      },
+    }).save();
+
     return sendSuccess(res, {}, 'Password has been reset successfully');
   } catch (error) {
     logger.error('RESET_PASSWORD_ERROR');
@@ -227,7 +266,7 @@ export const changePassword = async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
     const user = await UserModel.findById(req.user.id);
-    
+
     if (!user) {
       return sendBadRequest(res, 'User not found');
     }
@@ -242,6 +281,15 @@ export const changePassword = async (req, res) => {
     user.password_hash = await bcrypt.hashSync(new_password, 10);
     await user.save();
 
+    await new AuditHistoryModel({
+      actor_id: user._id,
+      action: "CHANGE_PASSWORD",
+      details: {
+        email: user.email,
+        role: user.role,
+      },
+    }).save();
+
     return sendSuccess(res, {}, messages.passwordChanged);
   } catch (e) {
     logger.error('CHANGE_PASSWORD_ERROR');
@@ -254,7 +302,7 @@ export const changePassword = async (req, res) => {
 export const getProfile = async (req, res) => {
   try {
     const data = req.user
-    
+
     return sendSuccess(res, data, messages.profileFetched);
   } catch (e) {
     logger.error('GET_PROFILE_ERROR');
@@ -268,22 +316,35 @@ export const getProfile = async (req, res) => {
 export const updateProfile = async (req, res) => {
   try {
     const data = req.body;
+
     const user = await UserModel.findById(req.user.id);
-    
+
+    if (req.file) {
+      user.profile_url = req.file.path;
+    }
+
     if (!user) {
       return sendBadRequest(res, 'User not found');
     }
 
     // Update user profile
-    if (data.username) {
-      user.username = data.username;
+    if (data.name) {
+      user.username = data.name;
     }
+
     if (data.email) {
-      const user = await UserModel.findOne({ email: data.email });
-      if(user) return sendBadRequest(res, messages.emailAlreadyExist);
-      
+      const isUserExist = await UserModel.findOne({ email: data.email });
+      if (isUserExist) return sendBadRequest(res, messages.emailAlreadyExist);
+
       user.email = data.email;
     }
+
+    await new AuditHistoryModel({
+      actor_id: user._id,
+      action: "UPDATE_PROFILE",
+      details: data,
+    }).save();
+
     await user.save();
 
     return sendSuccess(res, null, messages.profileUpdated);

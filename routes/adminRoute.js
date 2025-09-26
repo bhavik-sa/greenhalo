@@ -2,16 +2,11 @@ import express from "express";
 import { body, param, query } from "express-validator";
 import {
   assignBadgeToUser,
-  createCheckinChamp,
+  createBadge,
   createCmsPage,
-  createGreenFlaggedBadge,
-  createGreenhaloChamp,
-  createHalodBadge,
-  createSaferDatingBadge,
-  createSocialConnectChamp,
-  createSocialSaferDatingBadge,
   deleteBadge,
   deleteCmsPage,
+  getAuditHistory,
   getBadges,
   getCmsPages,
   getContactRequests,
@@ -22,7 +17,7 @@ import {
   updateBadge,
   updateCmsPage,
   updateReportStatus,
-  updateUserProfile
+  updateUser,
 } from "../controllers/adminController.js";
 import { validateField } from "../middleware/field_validator/index.js";
 import constant from "../utilities/constant.js";
@@ -56,14 +51,13 @@ router.get(
       .optional()
       .isMongoId()
       .withMessage(messages.invalidUserId),
-    query("username")
+    query('search')
       .optional()
       .isString()
-      .withMessage(messages.invalidUsername),
-    query("email")
-      .optional()
-      .isEmail()
-      .withMessage(messages.invalidEmail),
+      .withMessage('Search must be a string')
+      .trim()
+      .notEmpty()
+      .withMessage('Search cannot be empty'),
     query("subscription")
       .optional()
       .isString()
@@ -129,9 +123,13 @@ router.put(
       .optional()
       .isString()
       .withMessage(messages.invalidSubscription),
+    // body('badgeId')
+    //   .optional()
+    //   .isMongoId()
+    //   .withMessage(messages.invalidBadgeId),
   ],
   validateField,
-  updateUserProfile
+  updateUser
 );
 
 
@@ -195,10 +193,23 @@ router.patch(
 );
 
 
+
+
 router.post(
-  '/checkin-champ',
+  '/badge',
   isAdmin,
-  upload.single('icon_url'),
+  (req, res, next) => {
+    const uploadFields = [
+      { name: 'icon_url', maxCount: 1 },
+      { name: 'safer_dating_media_uri', maxCount: 1 }
+    ];
+    upload.fields(uploadFields)(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      next();
+    });
+  },
   [
     body('title')
       .notEmpty()
@@ -206,152 +217,21 @@ router.post(
     body('html_content')
       .notEmpty()
       .withMessage(messages.htmlContentIsRequired),
-  ],
-
-  validateField,
-  createCheckinChamp
-);
-
-
-router.post(
-  '/safer-dating-badge',
-  isAdmin,
-  upload.single('icon_url'),
-  [
-    body('title')
-      .notEmpty()
-      .withMessage(messages.titleIsRequired),
-    body('html_content')
-      .notEmpty()
-      .withMessage(messages.htmlContentIsRequired),
-  ],
-
-  validateField,
-  createSaferDatingBadge
-);
-
-router.post(
-  '/social-safer-dating-badge',
-  isAdmin,
-  upload.single('media_url'),
-  [
-    body('safer_dating_id')
-      .notEmpty()
-      .withMessage(messages.saferDatingIdIsRequired)
-      .isMongoId()
-      .withMessage(messages.invalidSaferDatingId),
+    body('status')
+      .optional()
+      .isBoolean()
+      .withMessage(messages.statusMustBeABoolean),
     body('type')
-      .notEmpty()
-      .withMessage(messages.typeIsRequired)
+      .optional()
+      .isString()
       .isIn(constant.MEDIA_TYPE)
-      .withMessage(messages.invalidMediaType),
-  ],
-  validateField,
-  createSocialSaferDatingBadge
-);
-
-/**
- * @route   GET /admin/badges/:id?
- * @desc    Get all badges or a specific badge by ID
- * @access  Private/Admin
- * @param   {string} [id] - Badge ID (optional)
- * @query   {string} [type] - Filter by badge type
- * @query   {number} [page=1] - Page number for pagination
- * @query   {number} [limit=10] - Number of items per page
- */
-// router.get(
-//   '/badges/:id?',
-//   [
-//     isAdmin,
-//     param('id')
-//       .optional()
-//       .isMongoId()
-//       .withMessage(messages.invalidBadgeIdFormat),
-//     query('type')
-//       .optional()
-//       .isString()
-//       .withMessage(messages.typeMustBeAString),
-//     query('page')
-//       .optional()
-//       .isInt({ min: 1 })
-//       .withMessage(messages.pageMustBeAPositiveInteger),
-//     query('limit')
-//       .optional()
-//       .isInt({ min: 1, max: 100 })
-//       .withMessage(messages.limitMustBeBetween1And100),
-//     validateField
-//   ],
-//   getBadges
-// );
-
-router.post(
-  '/halod-badge',
-  isAdmin,
-  upload.single('icon_url'),
-  [
-    body('title')
-      .notEmpty()
-      .withMessage(messages.titleIsRequired),
-    body('html_content')
-      .notEmpty()
-      .withMessage(messages.htmlContentIsRequired),
+      .withMessage(messages.invalidType), 
   ],
 
   validateField,
-  createHalodBadge
+  createBadge
 );
 
-router.post(
-  '/greenhalo-badge',
-  isAdmin,
-  upload.single('icon_url'),
-  [
-    body('title')
-      .notEmpty()
-      .withMessage(messages.titleIsRequired),
-    body('html_content')
-      .notEmpty()
-      .withMessage(messages.htmlContentIsRequired),
-  ],
-
-  validateField,
-  createGreenhaloChamp
-);
-
-router.post(
-  '/social-connect-badge',
-  isAdmin,
-  upload.single('icon_url'),
-  [
-    body('title')
-      .notEmpty()
-      .withMessage(messages.titleIsRequired),
-    body('html_content')
-      .notEmpty()
-      .withMessage(messages.htmlContentIsRequired),
-  ],
-
-  validateField,
-  createSocialConnectChamp
-);
-
-
-router.post(
-  '/green-flagged-badge',
-  isAdmin,
-  upload.single('icon_url'),
-  [
-    body('title')
-      .notEmpty()
-      .withMessage(messages.titleIsRequired),
-    body('html_content')
-      .notEmpty()
-      .withMessage(messages.htmlContentIsRequired),
-  ],
-
-  validateField,
-  createGreenFlaggedBadge
-);
 
 
 router.get(
@@ -362,18 +242,26 @@ router.get(
       .optional()
       .isMongoId()
       .withMessage(messages.invalidBadgeId),
+    query('userId')
+      .optional()
+      .isMongoId()
+      .withMessage(messages.invalidUserId),
     query('status')
       .optional()
       .isBoolean()
       .withMessage(messages.statusMustBeABoolean),
-    query('title')
+    query('search')
       .optional()
       .isString()
-      .withMessage(messages.titleMustBeAString),
-    query('type')
+      .withMessage(messages.searchMustBeAString),
+    query('startDate')
       .optional()
-      .isString()
-      .withMessage(messages.typeMustBeAString),
+      .isISO8601()
+      .withMessage(messages.invalidStartDate),
+    query('endDate')
+      .optional()
+      .isISO8601()
+      .withMessage(messages.invalidEndDate),
     query('page')
       .optional()
       .isInt({ min: 1 })
@@ -392,7 +280,18 @@ router.get(
 router.put(
   '/update/badge/:badgeId',
   isAdmin,
-  upload.single('icon_url'),
+  (req, res, next) => {
+    const uploadFields = [
+      { name: 'icon_url', maxCount: 1 },
+      { name: 'safer_dating_media_uri', maxCount: 1 }
+    ];
+    upload.fields(uploadFields)(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      next();
+    });
+  },
   [
     param('badgeId')
       .notEmpty()
@@ -411,6 +310,12 @@ router.put(
       .optional()
       .isString()
       .withMessage(messages.htmlContentMustBeAString),
+    body('type')
+      .optional()
+      .isString()
+      .isIn(constant.MEDIA_TYPE)
+      .withMessage(messages.invalidType),
+      
   ],
   validateField,
   updateBadge
@@ -505,14 +410,6 @@ router.get(
       .optional()
       .isInt({ min: 1 })
       .withMessage(messages.pageMustBeAPositiveInteger),
-    query('page_name')
-      .optional()
-      .isString()
-      .withMessage(messages.pageNameMustBeAString),
-    query('content')
-      .optional()
-      .isString()
-      .withMessage(messages.contentMustBeAString),
     query('limit')
       .optional()
       .isInt({ min: 1, max: 100 })
@@ -521,6 +418,18 @@ router.get(
       .optional()
       .isIn(constant.CMS_PAGE_STATUS)
       .withMessage(messages.invalidStatus),
+    query('search')
+      .optional()
+      .isString()
+      .withMessage(messages.searchMustBeAString),
+    query('startDate')
+      .optional()
+      .isISO8601()
+      .withMessage(messages.invalidStartDate),
+    query('endDate')
+      .optional()
+      .isISO8601()
+      .withMessage(messages.invalidEndDate),
   ],
   validateField,
   getCmsPages
@@ -599,18 +508,22 @@ router.get(
       .optional()
       .isMongoId()
       .withMessage(messages.inValidId),
-    query('subject')
+    query('search')
       .optional()
       .isString()
-      .withMessage(messages.subjectMustBeAString),
-    query('message')
-      .optional()
-      .isString()
-      .withMessage(messages.messageMustBeAString),
+      .withMessage(messages.searchMustBeAString),
     query('userId')
       .optional()
       .isMongoId()
       .withMessage(messages.inValidId),
+    query('startDate')
+      .optional()
+      .isISO8601()
+      .withMessage(messages.invalidStartDate),
+    query('endDate')
+      .optional()
+      .isISO8601()
+      .withMessage(messages.invalidEndDate),
     
   ],
   validateField,
@@ -646,6 +559,20 @@ router.put(
   respondToContactRequest
 );
 
+// Audit History Routes
+  router.get(
+    '/audit-history',
+    isAdmin,
+    [
+      query('search').optional().isString().trim(),
+      query('startDate').optional().isISO8601(),
+      query('endDate').optional().isISO8601(),
+      query('page').optional().isInt({ min: 1 }),
+      query('limit').optional().isInt({ min: 1, max: 100 })
+    ],
+    validateField,
+    getAuditHistory
+  );
 
-
+// Export the router
 export default router;
